@@ -18,9 +18,26 @@ byte max1k[9] = {0xFF, 0x01, 0x99, 0x00, 0x00, 0x00, 0x03, 0xE8, 0x7B};
 byte max2k[9] = {0xFF, 0x01, 0x99, 0x00, 0x00, 0x00, 0x07, 0xD0, 0x8F};
 byte max3k[9] = {0xFF, 0x01, 0x99, 0x00, 0x00, 0x00, 0x0B, 0xB8, 0xA3};
 byte max5k[9] = {0xFF, 0x01, 0x99, 0x00, 0x00, 0x00, 0x13, 0x88, 0xCB};
-byte ac[9] = {0xFF, 0x01, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x86};
+byte disabled_ac[9] = {0xFF, 0x01, 0x79, 0x00, 0x00, 0x00, 0x00, 0x00, 0x86};
+byte enabled_ac[9] = {0xFF, 0x01, 0x79, 0xA0, 0x00, 0x00, 0x00, 0x00, 0xE6};
+byte reset_zero[9] = {0xFF, 0x01, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78};
+// checksum = (0xFF + (0xFF - [0xFF, 0x01, 0x79, 0xA0, 0x00, 0x00, 0x00, 0x00].slice(1).reduce((com, cur) => com += cur, 0)) + 2).toString(16)
 
 SoftwareSerial co2Serial(5, 4, false, 256);
+
+String getClientId()
+{
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+
+  String clientId = "";
+  for (int i = 0; i < 6; ++i)
+  {
+    clientId += String(mac[i], 16);
+  }
+
+  return clientId;
+}
 
 void setup()
 {
@@ -85,12 +102,12 @@ void setup()
   Serial.println(WiFi.localIP());
 
   client.setServer(mqttServer, 1883);
+  client.setCallback(callback);
 
   co2Serial.begin(9600);
   delay(2000);
   co2Serial.write(max2k, 9);
-  // disable auto calibration
-  co2Serial.write(ac, 9);
+  co2Serial.write(disabled_ac, 9);
 }
 
 void requestMHZ19B()
@@ -122,9 +139,11 @@ void requestMHZ19B()
   int ppm = (256 * responseHigh) + responseLow;
   int temp = (int)response[4] - 40;
 
-  const int capacity = JSON_OBJECT_SIZE(2);
+  const int capacity = JSON_OBJECT_SIZE(4);
   StaticJsonBuffer<capacity> jb;
   JsonObject &obj = jb.createObject();
+  String clientId = getClientId();
+  obj.set("clientId", clientId);
   obj.set("ppm", ppm);
   obj.set("temp", temp);
 
@@ -143,11 +162,47 @@ void reconnect()
     if (client.connect(clientId.c_str()))
     {
       Serial.println("connected");
+      client.subscribe("inTopic");
     }
     else
     {
       Serial.print(".");
       delay(5000);
+    }
+  }
+}
+
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  if (strcmp(topic, "inTopic") == 0)
+  {
+    const int capacity = JSON_OBJECT_SIZE(2);
+    StaticJsonBuffer<capacity> jb;
+    JsonObject &root = jb.parseObject(payload);
+    if (!root.success())
+    {
+      Serial.println("parseObject() failed");
+      return;
+    }
+
+    String clientId = getClientId();
+    const char *receivedClientId = root["clientId"];
+    if (strcmp(receivedClientId, clientId.c_str()) == 0)
+    {
+      const char *command = root["command"];
+      if (strcmp(command, "reset_zero") == 0)
+      {
+        co2Serial.write(reset_zero, 9);
+      }
     }
   }
 }
