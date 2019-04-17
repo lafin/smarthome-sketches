@@ -6,9 +6,10 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 
-const char *ssid = "";
-const char *password = "";
-char *mqttServer = "192.168.0.88";
+#include "secret.h"
+// const char *ssid = "ssid";
+// const char *password = "password";
+// char *mqttServer = "mqttServer";
 
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
@@ -105,22 +106,36 @@ void setup()
   client.setCallback(callback);
 
   co2Serial.begin(9600);
-  delay(2000);
+  delay(5000);
+
   co2Serial.write(max2k, 9);
+  delay(300);
+  readSerialData();
+
   co2Serial.write(disabled_ac, 9);
+  delay(300);
+  readSerialData();
 }
 
-void requestMHZ19B()
+char* readSerialData()
 {
-  char response[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
-  co2Serial.write(askco2, 9);
-  delay(100);
   while (co2Serial.available() > 0 && (unsigned char)co2Serial.peek() != 0xFF)
   {
     co2Serial.read();
   }
+  char response[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
   memset(response, 0, 9);
   co2Serial.readBytes(response, 9);
+
+  return response;
+}
+
+void requestMHZ19B()
+{
+  co2Serial.write(askco2, 9);
+  delay(300);
+  char* response = readSerialData();
+
   if (response[0] != 0xFF)
   {
     Serial.println("\n\rWrong starting byte from co2 sensor!");
@@ -139,13 +154,15 @@ void requestMHZ19B()
   int ppm = (256 * responseHigh) + responseLow;
   int temp = (int)response[4] - 40;
 
-  const int capacity = JSON_OBJECT_SIZE(4);
+  const int capacity = JSON_OBJECT_SIZE(6);
   StaticJsonBuffer<capacity> jb;
   JsonObject &obj = jb.createObject();
   String clientId = getClientId();
   obj.set("clientId", clientId);
   obj.set("ppm", ppm);
   obj.set("temp", temp);
+  obj.set("freeHeap", ESP.getFreeHeap());
+  obj.set("maxFreeBlockSize", ESP.getMaxFreeBlockSize());
 
   String output = "";
   obj.printTo(output);
@@ -202,13 +219,15 @@ void callback(char *topic, byte *payload, unsigned int length)
       if (strcmp(command, "reset_zero") == 0)
       {
         co2Serial.write(reset_zero, 9);
+        delay(300);
+        readSerialData();
       }
     }
   }
 }
 
 unsigned long previousTime = millis();
-const unsigned long interval = 5 * 1000;
+const unsigned long interval = 10 * 1000;
 
 unsigned long startTime = millis();
 const unsigned long intervalRestart = 24 * 60 * 60 * 1000;
@@ -216,12 +235,10 @@ const unsigned long intervalRestart = 24 * 60 * 60 * 1000;
 void loop()
 {
   ArduinoOTA.handle();
-
   if (!client.connected())
   {
     reconnect();
   }
-  client.loop();
 
   if ((millis() - startTime) > intervalRestart)
   {
@@ -234,4 +251,6 @@ void loop()
     requestMHZ19B();
     previousTime += diff;
   }
+
+  client.loop();
 }
