@@ -7,9 +7,14 @@
 #include <PubSubClient.h>
 
 #include "secret.h"
+// #ifndef HEADER_FILE
+// #define HEADER_FILE
+
 // const char *ssid = "ssid";
 // const char *password = "password";
 // char *mqttServer = "mqttServer";
+
+// #endif
 
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
@@ -139,13 +144,11 @@ void requestMHZ19B()
   if (response[0] != 0xFF)
   {
     Serial.println("\n\rWrong starting byte from co2 sensor!");
-    Serial.println((int)response[0]);
     return;
   }
   if (response[1] != 0x86)
   {
     Serial.println("\n\rWrong command from co2 sensor!");
-    Serial.println((int)response[1]);
     return;
   }
 
@@ -221,6 +224,10 @@ void callback(char *topic, byte *payload, unsigned int length)
         co2Serial.write(reset_zero, 9);
         delay(300);
         readSerialData();
+      }
+      else if (strcmp(command, "restart") == 0)
+      {
+        ESP.restart();
       }
     }
   }

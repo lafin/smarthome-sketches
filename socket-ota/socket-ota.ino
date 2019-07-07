@@ -10,10 +10,16 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 
+#include "secret.h"
+// #ifndef HEADER_FILE
+// #define HEADER_FILE
+
+// const char *ssid = "ssid";
+// const char *password = "password";
+// char *mqttServer = "mqttServer";
+
+// #endif
 #define RELAYPIN 12
-const char *ssid = "";
-const char *password = "";
-char *mqttServer = "192.168.0.88";
 
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
