@@ -29,6 +29,7 @@ byte enabled_ac[9] = {0xFF, 0x01, 0x79, 0xA0, 0x00, 0x00, 0x00, 0x00, 0xE6};
 byte reset_zero[9] = {0xFF, 0x01, 0x87, 0x00, 0x00, 0x00, 0x00, 0x00, 0x78};
 // checksum = (0xFF + (0xFF - [0xFF, 0x01, 0x79, 0xA0, 0x00, 0x00, 0x00, 0x00].slice(1).reduce((com, cur) => com += cur, 0)) + 2).toString(16)
 
+String sensorId = "mh-z19b";
 SoftwareSerial co2Serial(5, 4, false, 256);
 
 String getClientId()
@@ -45,6 +46,129 @@ String getClientId()
   return clientId;
 }
 
+char* readSerialData()
+{
+  while (co2Serial.available() > 0 && (unsigned char)co2Serial.peek() != 0xFF)
+  {
+    co2Serial.read();
+  }
+  char response[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  memset(response, 0, 9);
+  co2Serial.readBytes(response, 9);
+
+  return response;
+}
+
+void beforeStart() {
+  co2Serial.write(max2k, 9);
+  delay(300);
+  readSerialData();
+
+  co2Serial.write(disabled_ac, 9);
+  delay(300);
+  readSerialData();
+}
+
+void resetZero() {
+  co2Serial.write(reset_zero, 9);
+  delay(300);
+  readSerialData();
+}
+
+void requestData()
+{
+  co2Serial.write(askco2, 9);
+  delay(300);
+  char* response = readSerialData();
+
+  if (response[0] != 0xFF)
+  {
+    Serial.println("\n\rWrong starting byte from co2 sensor!");
+    return;
+  }
+  if (response[1] != 0x86)
+  {
+    Serial.println("\n\rWrong command from co2 sensor!");
+    return;
+  }
+
+  int responseHigh = (int)response[2];
+  int responseLow = (int)response[3];
+  int ppm = (256 * responseHigh) + responseLow;
+  int temp = (int)response[4] - 40;
+
+  const int capacity = JSON_OBJECT_SIZE(6);
+  StaticJsonDocument<capacity> doc;
+  String clientId = getClientId();
+  doc["clientId"] = clientId;
+  doc["ppm"] = ppm;
+  doc["temp"] = temp;
+  doc["freeHeap"] = ESP.getFreeHeap();
+  doc["maxFreeBlockSize"] = ESP.getMaxFreeBlockSize();
+
+  String output = "";
+  serializeJson(doc, output);
+
+  client.publish(sensorId.c_str(), output.c_str());
+  Serial.println(output);
+}
+
+void reconnect()
+{
+  while (!client.connected())
+  {
+    if (client.connect(sensorId.c_str()))
+    {
+      Serial.println("connected");
+      client.subscribe("inTopic");
+    }
+    else
+    {
+      Serial.print(".");
+      delay(5000);
+    }
+  }
+}
+
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  if (strcmp(topic, "inTopic") == 0)
+  {
+    const int capacity = JSON_OBJECT_SIZE(2);
+    StaticJsonDocument<capacity> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error)
+    {
+      Serial.println("parseObject() failed");
+      return;
+    }
+
+    String clientId = getClientId();
+    const char *receivedClientId = doc["clientId"];
+    if (strcmp(receivedClientId, clientId.c_str()) == 0)
+    {
+      const char *command = doc["command"];
+      if (strcmp(command, "reset_zero") == 0)
+      {
+        resetZero();
+      }
+      else if (strcmp(command, "restart") == 0)
+      {
+        ESP.restart();
+      }
+    }
+  }
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -58,7 +182,8 @@ void setup()
     ESP.restart();
   }
 
-  ArduinoOTA.setHostname("sensor-mh-z19b");
+  String hostname = "sensor-" + sensorId;
+  ArduinoOTA.setHostname(hostname.c_str());
   ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH)
@@ -113,124 +238,7 @@ void setup()
   co2Serial.begin(9600);
   delay(5000);
 
-  co2Serial.write(max2k, 9);
-  delay(300);
-  readSerialData();
-
-  co2Serial.write(disabled_ac, 9);
-  delay(300);
-  readSerialData();
-}
-
-char* readSerialData()
-{
-  while (co2Serial.available() > 0 && (unsigned char)co2Serial.peek() != 0xFF)
-  {
-    co2Serial.read();
-  }
-  char response[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
-  memset(response, 0, 9);
-  co2Serial.readBytes(response, 9);
-
-  return response;
-}
-
-void requestMHZ19B()
-{
-  co2Serial.write(askco2, 9);
-  delay(300);
-  char* response = readSerialData();
-
-  if (response[0] != 0xFF)
-  {
-    Serial.println("\n\rWrong starting byte from co2 sensor!");
-    return;
-  }
-  if (response[1] != 0x86)
-  {
-    Serial.println("\n\rWrong command from co2 sensor!");
-    return;
-  }
-
-  int responseHigh = (int)response[2];
-  int responseLow = (int)response[3];
-  int ppm = (256 * responseHigh) + responseLow;
-  int temp = (int)response[4] - 40;
-
-  const int capacity = JSON_OBJECT_SIZE(6);
-  StaticJsonBuffer<capacity> jb;
-  JsonObject &obj = jb.createObject();
-  String clientId = getClientId();
-  obj.set("clientId", clientId);
-  obj.set("ppm", ppm);
-  obj.set("temp", temp);
-  obj.set("freeHeap", ESP.getFreeHeap());
-  obj.set("maxFreeBlockSize", ESP.getMaxFreeBlockSize());
-
-  String output = "";
-  obj.printTo(output);
-
-  client.publish("mh-z19b", output.c_str());
-  Serial.println(output);
-}
-
-void reconnect()
-{
-  while (!client.connected())
-  {
-    String clientId = "mh-z19b";
-    if (client.connect(clientId.c_str()))
-    {
-      Serial.println("connected");
-      client.subscribe("inTopic");
-    }
-    else
-    {
-      Serial.print(".");
-      delay(5000);
-    }
-  }
-}
-
-void callback(char *topic, byte *payload, unsigned int length)
-{
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i = 0; i < length; i++)
-  {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-
-  if (strcmp(topic, "inTopic") == 0)
-  {
-    const int capacity = JSON_OBJECT_SIZE(2);
-    StaticJsonBuffer<capacity> jb;
-    JsonObject &root = jb.parseObject(payload);
-    if (!root.success())
-    {
-      Serial.println("parseObject() failed");
-      return;
-    }
-
-    String clientId = getClientId();
-    const char *receivedClientId = root["clientId"];
-    if (strcmp(receivedClientId, clientId.c_str()) == 0)
-    {
-      const char *command = root["command"];
-      if (strcmp(command, "reset_zero") == 0)
-      {
-        co2Serial.write(reset_zero, 9);
-        delay(300);
-        readSerialData();
-      }
-      else if (strcmp(command, "restart") == 0)
-      {
-        ESP.restart();
-      }
-    }
-  }
+  beforeStart();
 }
 
 unsigned long previousTime = millis();
@@ -255,7 +263,7 @@ void loop()
   unsigned long diff = millis() - previousTime;
   if (diff > interval)
   {
-    requestMHZ19B();
+    requestData();
     previousTime += diff;
   }
 

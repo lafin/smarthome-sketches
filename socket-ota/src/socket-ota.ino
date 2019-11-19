@@ -41,15 +41,14 @@ String getClientId()
 void sendStatus(bool on)
 {
   const int capacity = JSON_OBJECT_SIZE(2);
-  StaticJsonBuffer<capacity> jb;
-  JsonObject &obj = jb.createObject();
+  StaticJsonDocument<capacity> doc;
 
   String clientId = getClientId();
-  obj.set("clientId", clientId.c_str());
-  obj.set("on", on);
+  doc["clientId"] = clientId;
+  doc["on"] = on;
 
   String output = "";
-  obj.printTo(output);
+  serializeJson(doc, output);
   Serial.println(output);
 
   client.publish("outTopic", output.c_str());
@@ -157,19 +156,19 @@ void callback(char *topic, byte *payload, unsigned int length)
   if (strcmp(topic, "inTopic") == 0)
   {
     const int capacity = JSON_OBJECT_SIZE(2);
-    StaticJsonBuffer<capacity> jb;
-    JsonObject &root = jb.parseObject(payload);
-    if (!root.success())
+    StaticJsonDocument<capacity> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error)
     {
       Serial.println("parseObject() failed");
       return;
     }
 
     String clientId = getClientId();
-    const char *receivedClientId = root["clientId"];
+    const char *receivedClientId = doc["clientId"];
     if (strcmp(receivedClientId, clientId.c_str()) == 0)
     {
-      bool on = root["on"];
+      bool on = doc["on"];
       digitalWrite(RELAYPIN, on ? HIGH : LOW);
     }
   }
